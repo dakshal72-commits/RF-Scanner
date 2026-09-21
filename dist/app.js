@@ -4,6 +4,7 @@ const SYNC_QUEUE_KEY = "rf-stock-move-sync-queue-v1";
 const MASTER_DATA_KEY = "rf-stock-move-master-data-v1";
 const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
 const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
+let connectionHealthy = navigator.onLine;
 
 const state = {
   sourceBin: "",
@@ -44,14 +45,27 @@ function normalize(value) {
 
 async function readSupabase(table, query) {
   if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Database configuration is missing.");
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-    },
-  });
-  if (!response.ok) throw new Error("Warehouse database could not be reached.");
-  return response.json();
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 4000);
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+      signal: controller.signal,
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+      },
+    });
+    if (!response.ok) throw new Error("Warehouse database could not be reached.");
+    connectionHealthy = true;
+    updateConnectionStatus();
+    return response.json();
+  } catch {
+    connectionHealthy = false;
+    updateConnectionStatus();
+    throw new Error("Warehouse database could not be reached.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 function getMasterData() {
@@ -438,7 +452,7 @@ function saveSyncQueue(queue) {
 
 function updateConnectionStatus() {
   const pending = getSyncQueue().length;
-  const online = navigator.onLine;
+  const online = navigator.onLine && connectionHealthy;
   elements.connectionStatus.classList.toggle("is-offline", !online);
   elements.connectionStatus.classList.toggle("has-pending", pending > 0);
   elements.connectionStatus.textContent = !online
@@ -459,24 +473,35 @@ function updateHistorySyncStatus(clientId, syncStatus) {
 
 async function sendTransfer(transfer) {
   if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Database configuration is missing.");
-  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_stock_transfer`, {
-    method: "POST",
-    headers: {
-      apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${SUPABASE_KEY}`,
-      "Content-Type": "application/json",
-      Prefer: "return=minimal",
-    },
-    body: JSON.stringify({
-      p_client_id: transfer.clientId,
-      p_reference: transfer.reference,
-      p_source_bin: transfer.sourceBin,
-      p_destination_bin: transfer.destinationBin,
-      p_items: transfer.items.map((item) => ({ sku: item.sku, quantity: item.quantity })),
-      p_completed_at: transfer.completedAt,
-    }),
-  });
-  if (!response.ok) throw new Error("Transfer could not be synced.");
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_stock_transfer`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        apikey: SUPABASE_KEY,
+        Authorization: `Bearer ${SUPABASE_KEY}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        p_client_id: transfer.clientId,
+        p_reference: transfer.reference,
+        p_source_bin: transfer.sourceBin,
+        p_destination_bin: transfer.destinationBin,
+        p_items: transfer.items.map((item) => ({ sku: item.sku, quantity: item.quantity })),
+        p_completed_at: transfer.completedAt,
+      }),
+    });
+    if (!response.ok) throw new Error("Transfer could not be synced.");
+    connectionHealthy = true;
+  } catch {
+    connectionHealthy = false;
+    throw new Error("Transfer could not be synced.");
+  } finally {
+    window.clearTimeout(timeout);
+  }
 }
 
 async function syncQueue({ announce = false } = {}) {
@@ -531,7 +556,7 @@ function confirmTransfer() {
   queue.push(transfer);
   saveSyncQueue(queue);
   localStorage.removeItem(STORAGE_KEY);
-  $("#success-reference").textContent = `${reference} • Saved safely${navigator.onLine ? " and syncing" : " offline"}`;
+  $("#success-reference").textContent = `${reference} • Saved safely${navigator.onLine && connectionHealthy ? " and syncing" : " offline"}`;
   renderHistory();
   showStep("success");
   void syncQueue();
@@ -705,15 +730,27 @@ $("#clear-history").addEventListener("click", () => {
 });
 elements.retrySync.addEventListener("click", () => void syncQueue({ announce: true }));
 window.addEventListener("online", () => {
+  connectionHealthy = true;
   updateConnectionStatus();
   void refreshMasterData();
   void syncQueue({ announce: true });
 });
-window.addEventListener("offline", updateConnectionStatus);
+window.addEventListener("offline", () => {
+  connectionHealthy = false;
+  updateConnectionStatus();
+});
+window.addEventListener("focus", () => void syncQueue());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void syncQueue();
+});
 
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js").catch(() => {}));
+  window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js?v=2").catch(() => {}));
 }
+
+window.setInterval(() => {
+  if (getSyncQueue().length) void syncQueue();
+}, 15000);
 
 renderBucket();
 renderHistory();

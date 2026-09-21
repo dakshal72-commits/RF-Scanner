@@ -1,4 +1,4 @@
-const CACHE_NAME = "rf-scanner-offline-v1";
+const CACHE_NAME = "rf-scanner-offline-v2";
 const APP_FILES = ["./", "./index.html", "./styles.css", "./config.js", "./app.js", "./manifest.webmanifest"];
 
 self.addEventListener("install", (event) => {
@@ -23,6 +23,6 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       })
-      .catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html")))
+      .catch(() => caches.match(event.request, { ignoreSearch: true }).then((cached) => cached || caches.match("./index.html")))
   );
 });
