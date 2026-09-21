@@ -1,5 +1,5 @@
-const CACHE_NAME = "rf-scanner-offline-v2";
-const APP_FILES = ["./", "./index.html", "./styles.css", "./config.js", "./app.js", "./manifest.webmanifest"];
+const CACHE_NAME = "rf-scanner-offline-v3";
+const APP_FILES = ["./", "./index.html", "./styles.css", "./config.js", "./app.js", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_FILES)));

@@ -5,6 +5,7 @@ const MASTER_DATA_KEY = "rf-stock-move-master-data-v1";
 const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
 const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
 let connectionHealthy = navigator.onLine;
+let offlineReady = false;
 
 const state = {
   sourceBin: "",
@@ -35,6 +36,7 @@ const elements = {
   draftStatus: $("#draft-status"),
   notice: $("#notice"),
   activeSourceBin: $("#active-source-bin"),
+  iosInstallTip: $("#ios-install-tip"),
   connectionStatus: $("#connection-status"),
   retrySync: $("#retry-sync"),
 };
@@ -459,7 +461,9 @@ function updateConnectionStatus() {
     ? `Offline${pending ? ` • ${pending} waiting` : ""}`
     : pending
       ? `Online • ${pending} waiting`
-      : "Online";
+      : offlineReady
+        ? "Online • Offline ready"
+        : "Online • Preparing offline";
   elements.retrySync.hidden = pending === 0;
 }
 
@@ -744,9 +748,27 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) void syncQueue();
 });
 
-if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js?v=2").catch(() => {}));
+async function initializeOfflineSupport() {
+  const dataRefreshed = await refreshMasterData();
+  const cached = getMasterData();
+  const dataReady = dataRefreshed || (cached.bins.length > 0 && cached.items.length > 0 && cached.inventory.length > 0);
+  let workerReady = false;
+  if ("serviceWorker" in navigator) {
+    try {
+      await navigator.serviceWorker.register("service-worker.js?v=3");
+      await navigator.serviceWorker.ready;
+      workerReady = true;
+    } catch {
+      workerReady = false;
+    }
+  }
+  offlineReady = dataReady && workerReady;
+  updateConnectionStatus();
 }
+
+const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+const isStandalone = window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+elements.iosInstallTip.hidden = !isIos || isStandalone;
 
 window.setInterval(() => {
   if (getSyncQueue().length) void syncQueue();
@@ -757,5 +779,5 @@ renderHistory();
 loadDraft();
 registerWebMcpTools();
 updateConnectionStatus();
-void refreshMasterData();
+void initializeOfflineSupport();
 void syncQueue();
