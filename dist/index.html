@@ -12,7 +12,7 @@
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1728'/%3E%3Cpath d='M15 18h34v9H15zm0 19h22v9H15z' fill='%236ee7b7'/%3E%3Cpath d='M42 34l9 8-9 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=iphone-1" />
+    <link rel="stylesheet" href="styles.css?v=demo-1" />
   </head>
   <body>
     <header class="app-header">
@@ -28,6 +28,21 @@
       <div id="ios-install-tip" class="install-tip" hidden>
         For reliable outage use on iPhone: tap <strong>Share</strong>, choose <strong>Add to Home Screen</strong>, then open RF Scanner from its icon.
       </div>
+
+      <details class="demo-guide">
+        <summary>
+          <span><strong>Try the demo</strong><small>Use a valid test transfer</small></span>
+        </summary>
+        <div class="demo-content">
+          <ol>
+            <li>Source bin: <code>A01.01.A03</code></li>
+            <li>SKU: <code>BWV12</code></li>
+            <li>Quantity: <code>1</code></li>
+            <li>Destination bin: <code>A01.01.A04</code></li>
+          </ol>
+          <p>Confirm the move, then open <strong>Recent transfers</strong> to see the SKU, quantity, and sync status.</p>
+        </div>
+      </details>
 
       <div id="stock-workspace" class="workspace scanner-workspace">
       <section id="source-step" aria-labelledby="source-title">

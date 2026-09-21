@@ -756,7 +756,7 @@ async function initializeOfflineSupport() {
   let workerReady = false;
   if ("serviceWorker" in navigator) {
     try {
-      await navigator.serviceWorker.register("service-worker.js?v=3");
+      await navigator.serviceWorker.register("service-worker.js?v=4");
       await navigator.serviceWorker.ready;
       workerReady = true;
     } catch {

@@ -1,4 +1,4 @@
-const CACHE_NAME = "rf-scanner-offline-v3";
+const CACHE_NAME = "rf-scanner-offline-v4";
 const APP_FILES = ["./", "./index.html", "./styles.css", "./config.js", "./app.js", "./manifest.webmanifest", "./icons/apple-touch-icon.png", "./icons/icon-192.png", "./icons/icon-512.png"];
 
 self.addEventListener("install", (event) => {
