@@ -1,5 +1,7 @@
 const STORAGE_KEY = "rf-stock-move-draft-v1";
 const HISTORY_KEY = "rf-stock-move-history-v1";
+const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
+const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
 
 const state = {
   sourceBin: "",
@@ -36,6 +38,33 @@ function normalize(value) {
   return value.trim().toUpperCase();
 }
 
+async function readSupabase(table, query) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Database configuration is missing.");
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+    },
+  });
+  if (!response.ok) throw new Error("Warehouse database could not be reached.");
+  return response.json();
+}
+
+async function findBin(binId) {
+  const rows = await readSupabase("bins", `id=eq.${encodeURIComponent(binId)}&active=eq.true&select=id&limit=1`);
+  return rows[0] || null;
+}
+
+async function findItem(sku) {
+  const rows = await readSupabase("items", `sku=eq.${encodeURIComponent(sku)}&active=eq.true&select=sku,description,unit&limit=1`);
+  return rows[0] || null;
+}
+
+async function findInventory(binId, sku) {
+  const rows = await readSupabase("inventory", `bin_id=eq.${encodeURIComponent(binId)}&sku=eq.${encodeURIComponent(sku)}&select=quantity&limit=1`);
+  return rows[0] || null;
+}
+
 function showMessage(message) {
   elements.notice.textContent = message;
   elements.notice.hidden = false;
@@ -55,13 +84,31 @@ function clearFieldError(element) {
   element.hidden = true;
 }
 
-function setSourceBin() {
+async function setSourceBin() {
   const source = normalize(elements.sourceBin.value);
   if (!source) {
     showMessage("Scan or enter a source bin first.");
     elements.sourceBin.focus();
     return;
   }
+  const button = $("#set-source");
+  button.disabled = true;
+  button.textContent = "Checking bin...";
+  try {
+    if (!await findBin(source)) {
+      showMessage(`${source} is not a valid active bin.`);
+      elements.sourceBin.focus();
+      elements.sourceBin.select();
+      return;
+    }
+  } catch (error) {
+    showMessage(error.message);
+    return;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Continue";
+  }
+
   state.sourceBin = source;
   elements.activeSourceBin.textContent = source;
   elements.sourceBin.value = source;
@@ -72,7 +119,7 @@ function setSourceBin() {
   window.setTimeout(() => elements.sku.focus(), 150);
 }
 
-function addItem(event) {
+async function addItem(event) {
   event.preventDefault();
   clearFieldError(elements.itemError);
 
@@ -97,12 +144,59 @@ function addItem(event) {
     return;
   }
 
+  const submitButton = event.submitter || $("#item-form button[type='submit']");
+  submitButton.disabled = true;
+  submitButton.textContent = "Checking inventory...";
+  let itemRecord;
+  let inventoryRecord;
+  try {
+    [itemRecord, inventoryRecord] = await Promise.all([
+      findItem(sku),
+      findInventory(state.sourceBin, sku),
+    ]);
+  } catch (error) {
+    showFieldError(elements.itemError, error.message);
+    return;
+  } finally {
+    submitButton.disabled = false;
+    submitButton.textContent = "Add to transfer bucket";
+  }
+
+  if (!itemRecord) {
+    showFieldError(elements.itemError, `${sku} is not a valid active SKU.`);
+    elements.sku.focus();
+    elements.sku.select();
+    return;
+  }
+  if (!inventoryRecord) {
+    showFieldError(elements.itemError, `${sku} is not stocked in ${state.sourceBin}.`);
+    elements.sku.focus();
+    elements.sku.select();
+    return;
+  }
+
   const existing = state.items.find((item) => item.sku === sku);
+  const requestedTotal = quantity + (existing?.quantity || 0);
+  if (requestedTotal > inventoryRecord.quantity) {
+    showFieldError(elements.itemError, `Only ${inventoryRecord.quantity} ${itemRecord.unit} of ${sku} are available in ${state.sourceBin}.`);
+    elements.quantity.focus();
+    elements.quantity.select();
+    return;
+  }
+
   if (existing) {
     existing.quantity += quantity;
+    existing.available = inventoryRecord.quantity;
     showMessage(`${sku} already existed, so the quantity was combined.`);
   } else {
-    state.items.push({ id: crypto.randomUUID(), sku, quantity });
+    state.items.push({
+      id: crypto.randomUUID(),
+      sku,
+      quantity,
+      available: inventoryRecord.quantity,
+      description: itemRecord.description,
+      unit: itemRecord.unit,
+    });
   }
 
   elements.sku.value = "";
@@ -119,6 +213,11 @@ function updateItem(id, value) {
   if (!Number.isInteger(quantity) || quantity < 1) {
     renderBucket();
     showMessage("Quantity must remain a whole number greater than zero.");
+    return;
+  }
+  if (Number.isInteger(item.available) && quantity > item.available) {
+    renderBucket();
+    showMessage(`Only ${item.available} ${item.unit || "units"} of ${item.sku} are available.`);
     return;
   }
   item.quantity = quantity;
@@ -145,7 +244,9 @@ function renderBucket() {
   state.items.forEach((item) => {
     const fragment = $("#bucket-item-template").content.cloneNode(true);
     fragment.querySelector(".item-sku").textContent = item.sku;
-    fragment.querySelector(".item-meta").textContent = `Source ${state.sourceBin || "not set"}`;
+    fragment.querySelector(".item-meta").textContent = item.description
+      ? `${item.description} • ${item.available} ${item.unit} available`
+      : `Source ${state.sourceBin || "not set"}`;
     const quantityInput = fragment.querySelector(".item-quantity");
     quantityInput.value = item.quantity;
     const editButton = fragment.querySelector(".edit-item");
@@ -241,7 +342,7 @@ function goToDestination() {
   window.setTimeout(() => elements.destinationBin.focus(), 150);
 }
 
-function prepareReview() {
+async function prepareReview() {
   clearFieldError(elements.destinationError);
   const destination = normalize(elements.destinationBin.value);
   if (!destination) {
@@ -253,6 +354,24 @@ function prepareReview() {
     showFieldError(elements.destinationError, "Destination bin must be different from the source bin.");
     elements.destinationBin.focus();
     return;
+  }
+
+  const button = $("#review-transfer");
+  button.disabled = true;
+  button.textContent = "Checking bin...";
+  try {
+    if (!await findBin(destination)) {
+      showFieldError(elements.destinationError, `${destination} is not a valid active bin.`);
+      elements.destinationBin.focus();
+      elements.destinationBin.select();
+      return;
+    }
+  } catch (error) {
+    showFieldError(elements.destinationError, error.message);
+    return;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Review transfer";
   }
 
   state.destinationBin = destination;
