@@ -178,7 +178,7 @@ async function addItem(event) {
   const existing = state.items.find((item) => item.sku === sku);
   const requestedTotal = quantity + (existing?.quantity || 0);
   if (requestedTotal > inventoryRecord.quantity) {
-    showFieldError(elements.itemError, `Only ${inventoryRecord.quantity} ${itemRecord.unit} of ${sku} are available in ${state.sourceBin}.`);
+    showFieldError(elements.itemError, `Only ${inventoryRecord.quantity} units of ${sku} are available in ${state.sourceBin}.`);
     elements.quantity.focus();
     elements.quantity.select();
     return;
@@ -217,7 +217,7 @@ function updateItem(id, value) {
   }
   if (Number.isInteger(item.available) && quantity > item.available) {
     renderBucket();
-    showMessage(`Only ${item.available} ${item.unit || "units"} of ${item.sku} are available.`);
+    showMessage(`Only ${item.available} units of ${item.sku} are available.`);
     return;
   }
   item.quantity = quantity;
@@ -244,8 +244,8 @@ function renderBucket() {
   state.items.forEach((item) => {
     const fragment = $("#bucket-item-template").content.cloneNode(true);
     fragment.querySelector(".item-sku").textContent = item.sku;
-    fragment.querySelector(".item-meta").textContent = item.description
-      ? `${item.description} • ${item.available} ${item.unit} available`
+    fragment.querySelector(".item-meta").textContent = Number.isInteger(item.available)
+      ? `${item.available} units available`
       : `Source ${state.sourceBin || "not set"}`;
     const quantityInput = fragment.querySelector(".item-quantity");
     quantityInput.value = item.quantity;
@@ -268,7 +268,6 @@ function renderBucket() {
   });
 
   $("#bucket-count").textContent = `${state.items.length} ${state.items.length === 1 ? "item" : "items"}`;
-  $("#total-quantity").textContent = totalQuantity();
   elements.continueButton.disabled = !state.sourceBin || !hasItems;
 }
 
@@ -378,7 +377,6 @@ async function prepareReview() {
   elements.destinationBin.value = destination;
   $("#review-source").textContent = state.sourceBin;
   $("#review-destination").textContent = state.destinationBin;
-  $("#review-total").textContent = totalQuantity();
   $("#review-items").innerHTML = state.items
     .map((item) => `<div class="review-row"><strong>${escapeHtml(item.sku)}</strong><span>Qty ${item.quantity}</span></div>`)
     .join("");
@@ -401,7 +399,7 @@ function confirmTransfer() {
   history.unshift(transfer);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 8)));
   localStorage.removeItem(STORAGE_KEY);
-  $("#success-reference").textContent = `${reference} • ${transfer.totalQuantity} units • ${transfer.sourceBin} to ${transfer.destinationBin}`;
+  $("#success-reference").textContent = `${reference} • ${transfer.sourceBin} to ${transfer.destinationBin}`;
   renderHistory();
   showStep("success");
 }
@@ -425,7 +423,7 @@ function renderHistory() {
   list.innerHTML = history.map((transfer) => {
     const date = new Date(transfer.completedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
     return `<article class="history-card">
-      <div><strong>${escapeHtml(transfer.reference)}</strong><p>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${transfer.items.length} items • ${transfer.totalQuantity} units</p></div>
+      <div><strong>${escapeHtml(transfer.reference)}</strong><p>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${transfer.items.length} items</p></div>
       <p class="history-date">${escapeHtml(date)}</p>
     </article>`;
   }).join("");
