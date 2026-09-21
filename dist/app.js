@@ -318,11 +318,6 @@ function showStep(step) {
   elements.reviewStep.hidden = step !== "review";
   elements.successStep.hidden = step !== "success";
 
-  const stepNumber = { source: 1, items: 2, destination: 3, review: 4, success: 4 }[step];
-  $$(".step").forEach((item, index) => {
-    item.classList.toggle("is-active", index + 1 === stepNumber && step !== "success");
-    item.classList.toggle("is-complete", index + 1 < stepNumber || step === "success");
-  });
   window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
@@ -422,10 +417,21 @@ function renderHistory() {
   }
   list.innerHTML = history.map((transfer) => {
     const date = new Date(transfer.completedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
-    return `<article class="history-card">
-      <div><strong>${escapeHtml(transfer.reference)}</strong><p>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${transfer.items.length} items</p></div>
-      <p class="history-date">${escapeHtml(date)}</p>
-    </article>`;
+    const items = Array.isArray(transfer.items) ? transfer.items : [];
+    const itemRows = items.map((item) => `<li>
+      <strong>${escapeHtml(item.sku)}</strong>
+      <span>Qty ${Number(item.quantity) || 0}</span>
+    </li>`).join("");
+    return `<details class="history-card">
+      <summary>
+        <span class="history-transfer"><strong>${escapeHtml(transfer.reference)}</strong><span>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${items.length} ${items.length === 1 ? "item" : "items"}</span></span>
+        <span class="history-date">${escapeHtml(date)}</span>
+      </summary>
+      <div class="history-details">
+        <p>Items moved</p>
+        <ul>${itemRows || "<li>No item details saved.</li>"}</ul>
+      </div>
+    </details>`;
   }).join("");
 }
 
