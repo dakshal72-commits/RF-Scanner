@@ -45,6 +45,7 @@ on conflict (id) do update set zone = excluded.zone, description = excluded.desc
 
 insert into public.items (sku, description, unit) values
   ('ABR10', '10 mm abrasive roll', 'EA'),
+  ('BWV12', 'BWV12', 'EA'),
   ('BLT25', '25 mm warehouse belt', 'EA'),
   ('BOX12', '12 inch shipping carton', 'EA'),
   ('GLV-M', 'Work gloves medium', 'PAIR'),
@@ -54,6 +55,7 @@ on conflict (sku) do update set description = excluded.description, unit = exclu
 
 insert into public.inventory (bin_id, sku, quantity) values
   ('A01.01.A03', 'ABR10', 40),
+  ('A01.01.A03', 'BWV12', 1000),
   ('A01.01.A03', 'BLT25', 18),
   ('A01.01.A03', 'GLV-M', 30),
   ('A01.01.A04', 'TAPE48', 72),
