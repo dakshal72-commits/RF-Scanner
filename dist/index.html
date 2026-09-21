@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Interactive RF stock movement workflow prototype built with HTML, CSS, and JavaScript." />
+    <title>RF Stock Move Prototype</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1728'/%3E%3Cpath d='M15 18h34v9H15zm0 19h22v9H15z' fill='%236ee7b7'/%3E%3Cpath d='M42 34l9 8-9 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css?v=mobile-4" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">WAREHOUSE OPERATIONS</p>
+        <h1>Move Stock</h1>
+      </div>
+    </header>
+
+    <main class="shell">
+      <ol class="stepper" aria-label="Transfer progress">
+        <li class="step is-active" data-step="1"><span>1</span>Source</li>
+        <li class="step" data-step="2"><span>2</span>Items</li>
+        <li class="step" data-step="3"><span>3</span>Destination</li>
+        <li class="step" data-step="4"><span>4</span>Confirm</li>
+      </ol>
+
+      <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <div id="stock-workspace" class="workspace scanner-workspace">
+      <section id="source-step" aria-labelledby="source-title">
+        <article class="panel focused-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">Step 1 of 4</p>
+              <h2 id="source-title">Scan source bin</h2>
+            </div>
+            <span id="draft-status" class="status-badge">Not saved</span>
+          </div>
+          <label for="source-bin">Source bin</label>
+          <input id="source-bin" autocomplete="off" inputmode="text" placeholder="Example: A-01-03" />
+          <p class="field-help">Press Enter after scanning the bin label.</p>
+          <button id="set-source" class="button button-primary button-full" type="button">Continue</button>
+        </article>
+      </section>
+
+      <section id="items-step" aria-labelledby="items-title" hidden>
+        <div class="work-column">
+          <article class="panel item-panel">
+            <div class="source-summary">
+              <div>
+                <span>Source bin</span>
+                <strong id="active-source-bin">Not set</strong>
+              </div>
+              <button class="text-button" data-back="source" type="button">Change</button>
+            </div>
+            <div class="panel-heading">
+              <div>
+                <p class="panel-kicker">Step 2 of 4</p>
+                <h2 id="items-title">Add items</h2>
+              </div>
+              <strong id="bucket-count" class="count">0 items</strong>
+            </div>
+            <form id="item-form" novalidate>
+              <div class="form-grid">
+                <div>
+                  <label for="sku">SKU</label>
+                  <input id="sku" autocomplete="off" placeholder="Scan or enter SKU" />
+                </div>
+                <div>
+                  <label for="quantity">Quantity</label>
+                  <input id="quantity" type="number" inputmode="numeric" min="1" step="1" placeholder="0" />
+                </div>
+              </div>
+              <p id="item-error" class="field-error" role="alert" hidden></p>
+              <button class="button button-primary button-full" type="submit">Add to transfer bucket</button>
+            </form>
+          </article>
+        </div>
+      </section>
+
+        <aside class="panel bucket-panel" aria-labelledby="bucket-title">
+          <div class="panel-heading">
+            <div>
+              <p class="panel-kicker">Current move</p>
+              <h2 id="bucket-title">Transfer bucket</h2>
+            </div>
+            <button id="save-draft" class="text-button" type="button">Save draft</button>
+          </div>
+          <div id="empty-bucket" class="empty-state">
+            <div class="empty-mark">0</div>
+            <h3>No items added</h3>
+            <p>Scan a SKU, enter its quantity, and add it to the bucket.</p>
+          </div>
+          <div id="bucket-list" class="bucket-list" hidden></div>
+          <div class="panel-footer">
+            <div>
+              <span>Total quantity</span>
+              <strong id="total-quantity">0</strong>
+            </div>
+            <button id="continue-destination" class="button button-primary" type="button" disabled>Continue</button>
+          </div>
+        </aside>
+      </div>
+
+      <section id="destination-step" class="single-step" aria-labelledby="destination-title" hidden>
+        <article class="panel focused-panel">
+          <button class="back-button" data-back="items" type="button">Back to items</button>
+          <p class="panel-kicker">Step 3 of 4</p>
+          <h2 id="destination-title">Scan destination bin</h2>
+          <p class="lead">All items in the bucket will be moved to this location.</p>
+          <label for="destination-bin">Destination bin</label>
+          <input id="destination-bin" autocomplete="off" placeholder="Example: B-04-02" />
+          <p id="destination-error" class="field-error" role="alert" hidden></p>
+          <button id="review-transfer" class="button button-primary button-full" type="button">Review transfer</button>
+        </article>
+      </section>
+
+      <section id="review-step" class="single-step" aria-labelledby="review-title" hidden>
+        <article class="panel review-panel">
+          <button class="back-button" data-back="destination" type="button">Back to destination</button>
+          <p class="panel-kicker">Step 4 of 4</p>
+          <h2 id="review-title">Review and confirm</h2>
+          <div class="route-summary">
+            <div><span>From</span><strong id="review-source">-</strong></div>
+            <div class="route-arrow" aria-hidden="true">→</div>
+            <div><span>To</span><strong id="review-destination">-</strong></div>
+          </div>
+          <div id="review-items" class="review-items"></div>
+          <div class="review-total"><span>Total quantity</span><strong id="review-total">0</strong></div>
+          <button id="confirm-transfer" class="button button-success button-full" type="button">Confirm bin transfer</button>
+        </article>
+      </section>
+
+      <section id="success-step" class="single-step" aria-labelledby="success-title" hidden>
+        <article class="panel success-panel">
+          <div class="success-icon" aria-hidden="true">✓</div>
+          <p class="panel-kicker">Transfer complete</p>
+          <h2 id="success-title">Stock moved successfully</h2>
+          <p id="success-reference" class="reference"></p>
+          <button id="start-another" class="button button-primary" type="button">Start another transfer</button>
+        </article>
+      </section>
+
+      <details class="history-section">
+        <summary id="history-title">
+          <span>
+            <span class="panel-kicker">Device history</span>
+            <strong>Recent transfers</strong>
+          </span>
+          <span id="history-count" class="history-count">0 saved</span>
+        </summary>
+        <div class="history-content" aria-labelledby="history-title">
+          <div class="history-actions">
+            <p>Check a previous move when you need to confirm what was transferred.</p>
+            <button id="clear-history" class="text-button" type="button">Clear history</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </div>
+      </details>
+    </main>
+
+    <template id="bucket-item-template">
+      <article class="bucket-item">
+        <div>
+          <strong class="item-sku"></strong>
+          <span class="item-meta"></span>
+        </div>
+        <div class="item-actions">
+          <label>
+            <span class="sr-only">Quantity</span>
+            <input class="item-quantity" type="number" min="1" step="1" readonly />
+          </label>
+          <button class="edit-item" type="button">Edit qty</button>
+          <button class="remove-item" type="button">Remove</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="app.js?v=mobile-4" defer></script>
+  </body>
+</html>
