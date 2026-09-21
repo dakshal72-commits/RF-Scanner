@@ -533,6 +533,7 @@ async function syncQueue({ announce = false } = {}) {
     }
   }
   saveSyncQueue(remaining);
+  if (synced) void refreshMasterData();
   if (announce || synced) {
     showMessage(remaining.length
       ? `${synced} synced. ${remaining.length} still waiting.`

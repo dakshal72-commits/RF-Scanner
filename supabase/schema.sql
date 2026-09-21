@@ -48,14 +48,49 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_item record;
+  v_available integer;
 begin
   if p_source_bin = p_destination_bin or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
     raise exception 'Invalid stock transfer';
   end if;
 
+  perform pg_advisory_xact_lock(hashtextextended(p_client_id::text, 0));
+  if exists (select 1 from public.stock_transfers where client_id = p_client_id) then
+    return;
+  end if;
+
   insert into public.stock_transfers (client_id, reference, source_bin, destination_bin, items, completed_at)
-  values (p_client_id, p_reference, p_source_bin, p_destination_bin, p_items, p_completed_at)
-  on conflict (client_id) do nothing;
+  values (p_client_id, p_reference, p_source_bin, p_destination_bin, p_items, p_completed_at);
+
+  for v_item in
+    select moved.sku, sum(moved.quantity)::integer as quantity
+    from jsonb_to_recordset(p_items) as moved(sku text, quantity integer)
+    group by moved.sku
+  loop
+    if v_item.sku is null or v_item.quantity is null or v_item.quantity < 1 then
+      raise exception 'Invalid item quantity';
+    end if;
+
+    select inv.quantity into v_available
+    from public.inventory as inv
+    where inv.bin_id = p_source_bin and inv.sku = v_item.sku
+    for update;
+
+    if v_available is null or v_available < v_item.quantity then
+      raise exception 'Insufficient inventory for SKU % in bin %', v_item.sku, p_source_bin;
+    end if;
+
+    update public.inventory as inv
+    set quantity = inv.quantity - v_item.quantity
+    where inv.bin_id = p_source_bin and inv.sku = v_item.sku;
+
+    insert into public.inventory (bin_id, sku, quantity)
+    values (p_destination_bin, v_item.sku, v_item.quantity)
+    on conflict (bin_id, sku) do update
+    set quantity = public.inventory.quantity + excluded.quantity;
+  end loop;
 end;
 $$;
 
