@@ -20,9 +20,48 @@ create table if not exists public.inventory (
   primary key (bin_id, sku)
 );
 
+create table if not exists public.stock_transfers (
+  client_id uuid primary key,
+  reference text not null,
+  source_bin text not null references public.bins(id),
+  destination_bin text not null references public.bins(id),
+  items jsonb not null check (jsonb_typeof(items) = 'array'),
+  completed_at timestamptz not null,
+  received_at timestamptz not null default now()
+);
+
 alter table public.bins enable row level security;
 alter table public.items enable row level security;
 alter table public.inventory enable row level security;
+alter table public.stock_transfers enable row level security;
+grant insert on public.stock_transfers to anon;
+
+create or replace function public.submit_stock_transfer(
+  p_client_id uuid,
+  p_reference text,
+  p_source_bin text,
+  p_destination_bin text,
+  p_items jsonb,
+  p_completed_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if p_source_bin = p_destination_bin or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
+    raise exception 'Invalid stock transfer';
+  end if;
+
+  insert into public.stock_transfers (client_id, reference, source_bin, destination_bin, items, completed_at)
+  values (p_client_id, p_reference, p_source_bin, p_destination_bin, p_items, p_completed_at)
+  on conflict (client_id) do nothing;
+end;
+$$;
+
+revoke all on function public.submit_stock_transfer(uuid, text, text, text, jsonb, timestamptz) from public;
+grant execute on function public.submit_stock_transfer(uuid, text, text, text, jsonb, timestamptz) to anon;
+revoke insert on public.stock_transfers from anon;
 
 drop policy if exists "Public can read active bins" on public.bins;
 create policy "Public can read active bins" on public.bins
@@ -33,6 +72,12 @@ create policy "Public can read active items" on public.items
 drop policy if exists "Public can read inventory" on public.inventory;
 create policy "Public can read inventory" on public.inventory
   for select to anon using (true);
+drop policy if exists "Scanners can submit transfers" on public.stock_transfers;
+create policy "Scanners can submit transfers" on public.stock_transfers
+  for insert to anon with check (
+    source_bin <> destination_bin
+    and jsonb_array_length(items) > 0
+  );
 
 insert into public.bins (id, zone, description) values
   ('A01.01.A03', 'A01', 'Small parts rack A03'),

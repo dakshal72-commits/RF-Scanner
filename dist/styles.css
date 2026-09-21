@@ -58,6 +58,9 @@ h3 { margin-bottom: 6px; }
   letter-spacing: 0.13em;
   text-transform: uppercase;
 }
+.connection-status { padding: 7px 11px; border: 1px solid rgba(110, 231, 183, 0.4); border-radius: 999px; color: var(--accent); font-size: 0.78rem; font-weight: 800; white-space: nowrap; }
+.connection-status.is-offline { color: var(--warning); border-color: rgba(255, 212, 121, 0.45); }
+.connection-status.has-pending { color: var(--warning); }
 
 .shell { width: min(480px, calc(100% - 24px)); margin: 0 auto; padding: 18px 0 48px; }
 
@@ -164,6 +167,7 @@ input[readonly] { color: var(--muted); }
 .history-content { padding: 0 14px 14px; border-top: 1px solid rgba(156, 176, 200, 0.16); }
 .history-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 2px; }
 .history-actions p { margin: 0; color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
+.history-buttons { display: flex; gap: 14px; flex-shrink: 0; }
 .history-list { max-height: 300px; display: grid; gap: 10px; overflow-y: auto; overscroll-behavior: contain; padding-right: 3px; }
 .history-card { border: 1px solid var(--border); border-radius: 12px; background: rgba(13, 27, 45, 0.62); overflow: hidden; }
 .history-card > summary { min-height: 0; display: grid; grid-template-columns: 1fr auto auto; gap: 10px 14px; align-items: center; padding: 16px 18px; }
@@ -171,6 +175,8 @@ input[readonly] { color: var(--muted); }
 .history-card[open] > summary::after { transform: rotate(180deg); }
 .history-transfer strong, .history-transfer span { display: block; }
 .history-transfer span, .history-card .history-date { color: var(--muted); }
+.sync-state { display: inline-block; margin-top: 5px; color: var(--accent); font-size: 0.75rem; font-weight: 800; }
+.sync-state.is-pending { color: var(--warning); }
 .history-card .history-date { text-align: right; font-size: 0.82rem; }
 .history-details { padding: 0 18px 16px; border-top: 1px solid rgba(156, 176, 200, 0.16); }
 .history-details p { margin: 12px 0 8px; color: var(--muted); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em; }
@@ -197,4 +203,5 @@ input[readonly] { color: var(--muted); }
   .history-card > summary { grid-template-columns: 1fr auto; }
   .history-card .history-date { text-align: left; }
   .history-card > summary::after { grid-column: 2; grid-row: 1 / span 2; }
+  .history-actions { align-items: flex-start; flex-direction: column; }
 }

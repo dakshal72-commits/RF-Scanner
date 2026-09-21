@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Interactive RF stock movement workflow prototype built with HTML, CSS, and JavaScript." />
+    <meta name="theme-color" content="#07111f" />
     <title>RF Stock Move Prototype</title>
+    <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1728'/%3E%3Cpath d='M15 18h34v9H15zm0 19h22v9H15z' fill='%236ee7b7'/%3E%3Cpath d='M42 34l9 8-9 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="styles.css?v=mobile-4" />
   </head>
@@ -14,6 +16,7 @@
         <p class="eyebrow">WAREHOUSE OPERATIONS</p>
         <h1>Move Stock</h1>
       </div>
+      <span id="connection-status" class="connection-status">Online</span>
     </header>
 
     <main class="shell">
@@ -140,7 +143,10 @@
         <div class="history-content" aria-labelledby="history-title">
           <div class="history-actions">
             <p>Check a previous move when you need to confirm what was transferred.</p>
-            <button id="clear-history" class="text-button" type="button">Clear history</button>
+            <div class="history-buttons">
+              <button id="retry-sync" class="text-button" type="button" hidden>Retry pending</button>
+              <button id="clear-history" class="text-button" type="button">Clear history</button>
+            </div>
           </div>
           <div id="history-list" class="history-list"></div>
         </div>
@@ -165,6 +171,6 @@
     </template>
 
     <script src="config.js?v=inventory-2" defer></script>
-    <script src="app.js?v=history-details-1" defer></script>
+    <script src="app.js?v=offline-queue-1" defer></script>
   </body>
 </html>

@@ -16,6 +16,8 @@ A browser-based warehouse RF workflow prototype built with plain HTML, CSS, and 
 - Form and workflow validation
 - Application state management
 - Device-local draft saving and transfer history with `localStorage`
+- Outage-safe transfer queuing with automatic Supabase retry and duplicate protection
+- Offline app-shell caching and cached bin, SKU, and inventory validation
 - Responsive interface design for desktop and handheld screens
 - Requirements-to-interface translation
 - Functional testing and error-state design
@@ -24,4 +26,4 @@ A browser-based warehouse RF workflow prototype built with plain HTML, CSS, and 
 
 Open `dist/index.html` in a modern browser.
 
-This is a portfolio prototype using mock state. It does not connect to NetSuite or use company inventory data.
+The scanner uses Supabase for validation and completed transfer records. When connectivity drops, it keeps transfers on the device and syncs them when the connection returns.

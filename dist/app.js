@@ -1,5 +1,7 @@
 const STORAGE_KEY = "rf-stock-move-draft-v1";
 const HISTORY_KEY = "rf-stock-move-history-v1";
+const SYNC_QUEUE_KEY = "rf-stock-move-sync-queue-v1";
+const MASTER_DATA_KEY = "rf-stock-move-master-data-v1";
 const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
 const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
 
@@ -32,6 +34,8 @@ const elements = {
   draftStatus: $("#draft-status"),
   notice: $("#notice"),
   activeSourceBin: $("#active-source-bin"),
+  connectionStatus: $("#connection-status"),
+  retrySync: $("#retry-sync"),
 };
 
 function normalize(value) {
@@ -50,19 +54,59 @@ async function readSupabase(table, query) {
   return response.json();
 }
 
+function getMasterData() {
+  try {
+    return JSON.parse(localStorage.getItem(MASTER_DATA_KEY)) || { bins: [], items: [], inventory: [] };
+  } catch {
+    return { bins: [], items: [], inventory: [] };
+  }
+}
+
+async function refreshMasterData() {
+  try {
+    const [bins, items, inventory] = await Promise.all([
+      readSupabase("bins", "active=eq.true&select=id"),
+      readSupabase("items", "active=eq.true&select=sku,description,unit"),
+      readSupabase("inventory", "select=bin_id,sku,quantity"),
+    ]);
+    localStorage.setItem(MASTER_DATA_KEY, JSON.stringify({ bins, items, inventory, cachedAt: new Date().toISOString() }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function findBin(binId) {
-  const rows = await readSupabase("bins", `id=eq.${encodeURIComponent(binId)}&active=eq.true&select=id&limit=1`);
-  return rows[0] || null;
+  try {
+    const rows = await readSupabase("bins", `id=eq.${encodeURIComponent(binId)}&active=eq.true&select=id&limit=1`);
+    return rows[0] || null;
+  } catch (error) {
+    const cached = getMasterData().bins.find((bin) => bin.id === binId);
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 async function findItem(sku) {
-  const rows = await readSupabase("items", `sku=eq.${encodeURIComponent(sku)}&active=eq.true&select=sku,description,unit&limit=1`);
-  return rows[0] || null;
+  try {
+    const rows = await readSupabase("items", `sku=eq.${encodeURIComponent(sku)}&active=eq.true&select=sku,description,unit&limit=1`);
+    return rows[0] || null;
+  } catch (error) {
+    const cached = getMasterData().items.find((item) => item.sku === sku);
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 async function findInventory(binId, sku) {
-  const rows = await readSupabase("inventory", `bin_id=eq.${encodeURIComponent(binId)}&sku=eq.${encodeURIComponent(sku)}&select=quantity&limit=1`);
-  return rows[0] || null;
+  try {
+    const rows = await readSupabase("inventory", `bin_id=eq.${encodeURIComponent(binId)}&sku=eq.${encodeURIComponent(sku)}&select=quantity&limit=1`);
+    return rows[0] || null;
+  } catch (error) {
+    const cached = getMasterData().inventory.find((row) => row.bin_id === binId && row.sku === sku);
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 function showMessage(message) {
@@ -379,24 +423,118 @@ async function prepareReview() {
   showStep("review");
 }
 
+function getSyncQueue() {
+  try {
+    return JSON.parse(localStorage.getItem(SYNC_QUEUE_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveSyncQueue(queue) {
+  localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(queue));
+  updateConnectionStatus();
+}
+
+function updateConnectionStatus() {
+  const pending = getSyncQueue().length;
+  const online = navigator.onLine;
+  elements.connectionStatus.classList.toggle("is-offline", !online);
+  elements.connectionStatus.classList.toggle("has-pending", pending > 0);
+  elements.connectionStatus.textContent = !online
+    ? `Offline${pending ? ` • ${pending} waiting` : ""}`
+    : pending
+      ? `Online • ${pending} waiting`
+      : "Online";
+  elements.retrySync.hidden = pending === 0;
+}
+
+function updateHistorySyncStatus(clientId, syncStatus) {
+  const history = getHistory();
+  const transfer = history.find((entry) => entry.clientId === clientId);
+  if (transfer) transfer.syncStatus = syncStatus;
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  renderHistory();
+}
+
+async function sendTransfer(transfer) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Database configuration is missing.");
+  const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_stock_transfer`, {
+    method: "POST",
+    headers: {
+      apikey: SUPABASE_KEY,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify({
+      p_client_id: transfer.clientId,
+      p_reference: transfer.reference,
+      p_source_bin: transfer.sourceBin,
+      p_destination_bin: transfer.destinationBin,
+      p_items: transfer.items.map((item) => ({ sku: item.sku, quantity: item.quantity })),
+      p_completed_at: transfer.completedAt,
+    }),
+  });
+  if (!response.ok) throw new Error("Transfer could not be synced.");
+}
+
+async function syncQueue({ announce = false } = {}) {
+  if (!navigator.onLine) {
+    updateConnectionStatus();
+    if (announce) showMessage("Still offline. The transfer remains safely queued.");
+    return;
+  }
+  const queue = getSyncQueue();
+  if (!queue.length) {
+    updateConnectionStatus();
+    return;
+  }
+  elements.connectionStatus.textContent = `Syncing ${queue.length}...`;
+  const remaining = [];
+  let synced = 0;
+  for (const transfer of queue) {
+    try {
+      await sendTransfer(transfer);
+      updateHistorySyncStatus(transfer.clientId, "synced");
+      synced += 1;
+    } catch {
+      remaining.push(transfer);
+      updateHistorySyncStatus(transfer.clientId, "waiting");
+    }
+  }
+  saveSyncQueue(remaining);
+  if (announce || synced) {
+    showMessage(remaining.length
+      ? `${synced} synced. ${remaining.length} still waiting.`
+      : `${synced} pending ${synced === 1 ? "transfer" : "transfers"} synced.`);
+  }
+}
+
 function confirmTransfer() {
   const completedAt = new Date();
   const reference = `BT-${completedAt.getFullYear()}-${String(Date.now()).slice(-6)}`;
   const transfer = {
+    clientId: crypto.randomUUID(),
     reference,
     sourceBin: state.sourceBin,
     destinationBin: state.destinationBin,
     items: state.items,
     totalQuantity: totalQuantity(),
     completedAt: completedAt.toISOString(),
+    syncStatus: "waiting",
   };
   const history = getHistory();
   history.unshift(transfer);
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 8)));
+  const queue = getSyncQueue();
+  queue.push(transfer);
+  saveSyncQueue(queue);
   localStorage.removeItem(STORAGE_KEY);
-  $("#success-reference").textContent = `${reference} • ${transfer.sourceBin} to ${transfer.destinationBin}`;
+  $("#success-reference").textContent = `${reference} • Saved safely${navigator.onLine ? " and syncing" : " offline"}`;
   renderHistory();
   showStep("success");
+  void syncQueue();
 }
 
 function getHistory() {
@@ -422,9 +560,10 @@ function renderHistory() {
       <strong>${escapeHtml(item.sku)}</strong>
       <span>Qty ${Number(item.quantity) || 0}</span>
     </li>`).join("");
+    const syncStatus = transfer.syncStatus === "synced" ? "Synced" : transfer.syncStatus === "waiting" ? "Waiting to sync" : "Device only";
     return `<details class="history-card">
       <summary>
-        <span class="history-transfer"><strong>${escapeHtml(transfer.reference)}</strong><span>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${items.length} ${items.length === 1 ? "item" : "items"}</span></span>
+        <span class="history-transfer"><strong>${escapeHtml(transfer.reference)}</strong><span>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${items.length} ${items.length === 1 ? "item" : "items"}</span><span class="sync-state ${syncStatus === "Waiting to sync" ? "is-pending" : ""}">${syncStatus}</span></span>
         <span class="history-date">${escapeHtml(date)}</span>
       </summary>
       <div class="history-details">
@@ -564,8 +703,22 @@ $("#clear-history").addEventListener("click", () => {
   renderHistory();
   showMessage("Transfer history cleared.");
 });
+elements.retrySync.addEventListener("click", () => void syncQueue({ announce: true }));
+window.addEventListener("online", () => {
+  updateConnectionStatus();
+  void refreshMasterData();
+  void syncQueue({ announce: true });
+});
+window.addEventListener("offline", updateConnectionStatus);
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("service-worker.js").catch(() => {}));
+}
 
 renderBucket();
 renderHistory();
 loadDraft();
 registerWebMcpTools();
+updateConnectionStatus();
+void refreshMasterData();
+void syncQueue();

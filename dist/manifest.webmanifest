@@ -1,0 +1,9 @@
+{
+  "name": "RF Stock Move",
+  "short_name": "RF Scanner",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#07111f",
+  "theme_color": "#07111f",
+  "description": "Warehouse stock transfer scanner with outage protection"
+}
