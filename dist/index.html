@@ -12,7 +12,7 @@
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1728'/%3E%3Cpath d='M15 18h34v9H15zm0 19h22v9H15z' fill='%236ee7b7'/%3E%3Cpath d='M42 34l9 8-9 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=demo-1" />
+    <link rel="stylesheet" href="styles.css?v=bucket-routing-1" />
   </head>
   <body>
     <header class="app-header">
@@ -40,7 +40,7 @@
             <li>Quantity: <code>1</code></li>
             <li>Destination bin: <code>A01.01.A04</code></li>
           </ol>
-          <p>Confirm the move, then open <strong>Recent transfers</strong> to see the SKU, quantity, and sync status.</p>
+          <p>Add the item to the bucket, continue, scan <code>BWV12</code> again, then enter the destination and move quantity. Complete the transfer and check <strong>Recent transfers</strong> for its sync status.</p>
         </div>
       </details>
 
@@ -111,36 +111,37 @@
           </div>
           <div id="bucket-list" class="bucket-list" hidden></div>
           <div class="panel-footer">
-            <button id="continue-destination" class="button button-primary" type="button" disabled>Continue</button>
+            <button id="continue-destination" class="button button-primary" type="button" disabled>Continue to move items</button>
           </div>
         </aside>
       </div>
 
-      <section id="destination-step" class="single-step" aria-labelledby="destination-title" hidden>
+      <section id="scan-step" class="single-step" aria-labelledby="scan-title" hidden>
         <article class="panel focused-panel">
-          <button class="back-button" data-back="items" type="button">Back to items</button>
+          <button class="back-button" data-back="items" type="button">Back to add items</button>
           <p class="panel-kicker">Step 3 of 4</p>
-          <h2 id="destination-title">Scan destination bin</h2>
-          <p class="lead">All items in the bucket will be moved to this location.</p>
-          <label for="destination-bin">Destination bin</label>
-          <input id="destination-bin" autocomplete="off" placeholder="Example: B01.04.A02" />
-          <p id="destination-error" class="field-error" role="alert" hidden></p>
-          <button id="review-transfer" class="button button-primary button-full" type="button">Review transfer</button>
+          <h2 id="scan-title">Scan item from bucket</h2>
+          <p class="lead">Scan a SKU already in the bucket. You can move some now and scan it again for the remainder.</p>
+          <div id="scan-bucket-list" class="scan-bucket-list"></div>
+          <label for="scan-bucket-sku">SKU in bucket</label>
+          <input id="scan-bucket-sku" autocomplete="off" placeholder="Scan SKU again" />
+          <p id="scan-error" class="field-error" role="alert" hidden></p>
+          <button id="select-bucket-item" class="button button-primary button-full" type="button">Choose destination</button>
         </article>
       </section>
 
-      <section id="review-step" class="single-step" aria-labelledby="review-title" hidden>
-        <article class="panel review-panel">
-          <button class="back-button" data-back="destination" type="button">Back to destination</button>
+      <section id="destination-step" class="single-step" aria-labelledby="destination-title" hidden>
+        <article class="panel focused-panel">
+          <button class="back-button" data-back="scan" type="button">Back to scan item</button>
           <p class="panel-kicker">Step 4 of 4</p>
-          <h2 id="review-title">Review and confirm</h2>
-          <div class="route-summary">
-            <div><span>From</span><strong id="review-source">-</strong></div>
-            <div class="route-arrow" aria-hidden="true">→</div>
-            <div><span>To</span><strong id="review-destination">-</strong></div>
-          </div>
-          <div id="review-items" class="review-items"></div>
-          <button id="confirm-transfer" class="button button-success button-full" type="button">Confirm bin transfer</button>
+          <h2 id="destination-title">Move scanned item</h2>
+          <p id="selected-item-summary" class="lead"></p>
+          <label for="destination-bin">Destination bin</label>
+          <input id="destination-bin" autocomplete="off" placeholder="Example: B01.04.A02" />
+          <label for="move-quantity">Move quantity</label>
+          <input id="move-quantity" type="number" inputmode="numeric" min="1" step="1" />
+          <p id="destination-error" class="field-error" role="alert" hidden></p>
+          <button id="complete-transfer" class="button button-primary button-full" type="button">Complete bin transfer</button>
         </article>
       </section>
 
@@ -150,7 +151,7 @@
           <p class="panel-kicker">Transfer complete</p>
           <h2 id="success-title">Stock moved successfully</h2>
           <p id="success-reference" class="reference"></p>
-          <button id="start-another" class="button button-primary" type="button">Start another transfer</button>
+          <button id="start-another" class="button button-primary" type="button">Move another item</button>
         </article>
       </section>
 
@@ -193,6 +194,6 @@
     </template>
 
     <script src="config.js?v=inventory-2" defer></script>
-    <script src="app.js?v=iphone-1" defer></script>
+    <script src="app.js?v=bucket-routing-1" defer></script>
   </body>
 </html>

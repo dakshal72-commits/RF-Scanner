@@ -9,8 +9,8 @@ let offlineReady = false;
 
 const state = {
   sourceBin: "",
-  destinationBin: "",
   items: [],
+  selectedItemId: "",
   currentStep: "source",
 };
 
@@ -21,16 +21,19 @@ const elements = {
   stockWorkspace: $("#stock-workspace"),
   sourceStep: $("#source-step"),
   itemsStep: $("#items-step"),
+  scanStep: $("#scan-step"),
   destinationStep: $("#destination-step"),
-  reviewStep: $("#review-step"),
   successStep: $("#success-step"),
   sourceBin: $("#source-bin"),
+  scanSku: $("#scan-bucket-sku"),
   destinationBin: $("#destination-bin"),
+  moveQuantity: $("#move-quantity"),
   sku: $("#sku"),
   quantity: $("#quantity"),
   bucketList: $("#bucket-list"),
   emptyBucket: $("#empty-bucket"),
   itemError: $("#item-error"),
+  scanError: $("#scan-error"),
   destinationError: $("#destination-error"),
   continueButton: $("#continue-destination"),
   draftStatus: $("#draft-status"),
@@ -151,6 +154,11 @@ async function setSourceBin() {
     elements.sourceBin.focus();
     return;
   }
+  if (state.items.length && state.sourceBin && source !== state.sourceBin) {
+    showMessage("Move or remove bucket items before changing the source bin.");
+    elements.sourceBin.value = state.sourceBin;
+    return;
+  }
   const button = $("#set-source");
   button.disabled = true;
   button.textContent = "Checking bin...";
@@ -237,8 +245,12 @@ async function addItem(event) {
 
   const existing = state.items.find((item) => item.sku === sku);
   const requestedTotal = quantity + (existing?.quantity || 0);
-  if (requestedTotal > inventoryRecord.quantity) {
-    showFieldError(elements.itemError, `Only ${inventoryRecord.quantity} units of ${sku} are available in ${state.sourceBin}.`);
+  const pendingUnits = getSyncQueue().reduce((total, transfer) => total + (transfer.sourceBin === state.sourceBin
+    ? (transfer.items || []).filter((entry) => entry.sku === sku).reduce((sum, entry) => sum + Number(entry.quantity || 0), 0)
+    : 0), 0);
+  const available = Math.max(0, inventoryRecord.quantity - pendingUnits);
+  if (requestedTotal > available) {
+    showFieldError(elements.itemError, `Only ${available} units of ${sku} are available in ${state.sourceBin}.`);
     elements.quantity.focus();
     elements.quantity.select();
     return;
@@ -246,14 +258,14 @@ async function addItem(event) {
 
   if (existing) {
     existing.quantity += quantity;
-    existing.available = inventoryRecord.quantity;
+    existing.available = available;
     showMessage(`${sku} already existed, so the quantity was combined.`);
   } else {
     state.items.push({
       id: crypto.randomUUID(),
       sku,
       quantity,
-      available: inventoryRecord.quantity,
+      available,
       description: itemRecord.description,
       unit: itemRecord.unit,
     });
@@ -336,14 +348,17 @@ function markDraftChanged() {
   elements.draftStatus.classList.remove("is-saved");
 }
 
-function saveDraft() {
+function persistDraft() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify({
     sourceBin: state.sourceBin,
-    destinationBin: state.destinationBin,
     items: state.items,
   }));
   elements.draftStatus.textContent = "Draft saved";
   elements.draftStatus.classList.add("is-saved");
+}
+
+function saveDraft() {
+  persistDraft();
   showMessage("Draft saved on this device.");
 }
 
@@ -353,12 +368,10 @@ function loadDraft() {
   try {
     const draft = JSON.parse(raw);
     state.sourceBin = draft.sourceBin || "";
-    state.destinationBin = draft.destinationBin || "";
     state.items = Array.isArray(draft.items) ? draft.items : [];
     elements.sourceBin.value = state.sourceBin;
     elements.activeSourceBin.textContent = state.sourceBin || "Not set";
     elements.sourceBin.readOnly = Boolean(state.sourceBin);
-    elements.destinationBin.value = state.destinationBin;
     elements.draftStatus.textContent = "Draft restored";
     elements.draftStatus.classList.add("is-saved");
     renderBucket();
@@ -374,8 +387,8 @@ function showStep(step) {
   elements.stockWorkspace.hidden = !["source", "items"].includes(step);
   elements.sourceStep.hidden = step !== "source";
   elements.itemsStep.hidden = step !== "items";
+  elements.scanStep.hidden = step !== "scan";
   elements.destinationStep.hidden = step !== "destination";
-  elements.reviewStep.hidden = step !== "review";
   elements.successStep.hidden = step !== "success";
 
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -390,53 +403,38 @@ function goToSource() {
   }, 150);
 }
 
-function goToDestination() {
+function goToScan() {
   if (!state.sourceBin || state.items.length === 0) return;
-  showStep("destination");
-  window.setTimeout(() => elements.destinationBin.focus(), 150);
+  renderScanBucket();
+  clearFieldError(elements.scanError);
+  showStep("scan");
+  window.setTimeout(() => elements.scanSku.focus(), 150);
 }
 
-async function prepareReview() {
-  clearFieldError(elements.destinationError);
-  const destination = normalize(elements.destinationBin.value);
-  if (!destination) {
-    showFieldError(elements.destinationError, "Scan or enter a destination bin.");
-    elements.destinationBin.focus();
-    return;
-  }
-  if (destination === state.sourceBin) {
-    showFieldError(elements.destinationError, "Destination bin must be different from the source bin.");
-    elements.destinationBin.focus();
-    return;
-  }
-
-  const button = $("#review-transfer");
-  button.disabled = true;
-  button.textContent = "Checking bin...";
-  try {
-    if (!await findBin(destination)) {
-      showFieldError(elements.destinationError, `${destination} is not a valid active bin.`);
-      elements.destinationBin.focus();
-      elements.destinationBin.select();
-      return;
-    }
-  } catch (error) {
-    showFieldError(elements.destinationError, error.message);
-    return;
-  } finally {
-    button.disabled = false;
-    button.textContent = "Review transfer";
-  }
-
-  state.destinationBin = destination;
-  elements.destinationBin.value = destination;
-  $("#review-source").textContent = state.sourceBin;
-  $("#review-destination").textContent = state.destinationBin;
-  $("#review-items").innerHTML = state.items
-    .map((item) => `<div class="review-row"><strong>${escapeHtml(item.sku)}</strong><span>Qty ${item.quantity}</span></div>`)
+function renderScanBucket() {
+  $("#scan-bucket-list").innerHTML = state.items
+    .filter((item) => item.quantity > 0)
+    .map((item) => `<div class="scan-bucket-row"><strong>${escapeHtml(item.sku)}</strong><span>${item.quantity} units remaining</span></div>`)
     .join("");
-  markDraftChanged();
-  showStep("review");
+}
+
+function selectBucketItem() {
+  clearFieldError(elements.scanError);
+  const sku = normalize(elements.scanSku.value);
+  const item = state.items.find((entry) => entry.sku === sku && entry.quantity > 0);
+  if (!item) {
+    showFieldError(elements.scanError, "Scan a SKU with quantity remaining in the transfer bucket.");
+    elements.scanSku.focus();
+    return;
+  }
+  state.selectedItemId = item.id;
+  $("#selected-item-summary").textContent = `${item.sku} • ${item.quantity} units remaining in ${state.sourceBin}`;
+  elements.moveQuantity.value = item.quantity;
+  elements.moveQuantity.max = item.quantity;
+  elements.destinationBin.value = "";
+  clearFieldError(elements.destinationError);
+  showStep("destination");
+  window.setTimeout(() => elements.destinationBin.focus(), 150);
 }
 
 function getSyncQueue() {
@@ -541,16 +539,52 @@ async function syncQueue({ announce = false } = {}) {
   }
 }
 
-function confirmTransfer() {
+async function completeTransfer() {
+  clearFieldError(elements.destinationError);
+  const item = state.items.find((entry) => entry.id === state.selectedItemId);
+  const destination = normalize(elements.destinationBin.value);
+  const quantity = Number(elements.moveQuantity.value);
+  if (!item || !state.sourceBin) {
+    showStep("scan");
+    return;
+  }
+  if (!Number.isInteger(quantity) || quantity < 1 || quantity > item.quantity) {
+    showFieldError(elements.destinationError, `Move 1 to ${item.quantity} units of ${item.sku}.`);
+    elements.moveQuantity.focus();
+    return;
+  }
+  if (!destination || destination === state.sourceBin) {
+    showFieldError(elements.destinationError, "Scan a destination bin different from the source bin.");
+    elements.destinationBin.focus();
+    return;
+  }
+  const button = $("#complete-transfer");
+  button.disabled = true;
+  button.textContent = "Checking bin...";
+  try {
+    if (!await findBin(destination)) {
+      showFieldError(elements.destinationError, `${destination} is not a valid active bin.`);
+      elements.destinationBin.focus();
+      elements.destinationBin.select();
+      return;
+    }
+  } catch (error) {
+    showFieldError(elements.destinationError, error.message);
+    return;
+  } finally {
+    button.disabled = false;
+    button.textContent = "Complete bin transfer";
+  }
+
   const completedAt = new Date();
   const reference = `BT-${completedAt.getFullYear()}-${String(Date.now()).slice(-6)}`;
   const transfer = {
     clientId: crypto.randomUUID(),
     reference,
     sourceBin: state.sourceBin,
-    destinationBin: state.destinationBin,
-    items: state.items,
-    totalQuantity: totalQuantity(),
+    destinationBin: destination,
+    items: [{ sku: item.sku, quantity }],
+    totalQuantity: quantity,
     completedAt: completedAt.toISOString(),
     syncStatus: "waiting",
   };
@@ -560,8 +594,14 @@ function confirmTransfer() {
   const queue = getSyncQueue();
   queue.push(transfer);
   saveSyncQueue(queue);
-  localStorage.removeItem(STORAGE_KEY);
-  $("#success-reference").textContent = `${reference} • Saved safely${navigator.onLine && connectionHealthy ? " and syncing" : " offline"}`;
+  item.quantity -= quantity;
+  if (Number.isInteger(item.available)) item.available = Math.max(0, item.available - quantity);
+  if (item.quantity === 0) state.items = state.items.filter((entry) => entry.id !== item.id);
+  state.selectedItemId = "";
+  persistDraft();
+  renderBucket();
+  $("#start-another").textContent = state.items.length ? "Move another item" : "Add more items";
+  $("#success-reference").textContent = `${reference} • ${item.sku} • ${quantity} units • ${state.sourceBin} → ${destination} • ${navigator.onLine && connectionHealthy ? "Syncing" : "Waiting to sync"}`;
   renderHistory();
   showStep("success");
   void syncQueue();
@@ -604,22 +644,13 @@ function renderHistory() {
   }).join("");
 }
 
-function resetTransfer() {
-  Object.assign(state, { sourceBin: "", destinationBin: "", items: [], currentStep: "source" });
-  localStorage.removeItem(STORAGE_KEY);
-  elements.sourceBin.value = "";
-  elements.activeSourceBin.textContent = "Not set";
-  elements.sourceBin.readOnly = false;
-  elements.destinationBin.value = "";
-  elements.sku.value = "";
-  elements.quantity.value = "";
-  elements.draftStatus.textContent = "Not saved";
-  elements.draftStatus.classList.remove("is-saved");
-  clearFieldError(elements.itemError);
-  clearFieldError(elements.destinationError);
-  renderBucket();
-  showStep("source");
-  elements.sourceBin.focus();
+function continueAfterTransfer() {
+  elements.scanSku.value = "";
+  if (state.items.length) goToScan();
+  else {
+    showStep("items");
+    elements.sku.focus();
+  }
 }
 
 function escapeHtml(value) {
@@ -631,103 +662,25 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function registerWebMcpTools() {
-  const context = document.modelContext;
-  if (!context?.registerTool) return;
-
-  const lifecycle = new AbortController();
-  const reportRegistrationError = (error) => console.warn("WebMCP tool registration failed", error);
-
-  try {
-    void Promise.resolve(context.registerTool({
-      name: "stage_stock_transfer",
-      title: "Stage stock transfer",
-      description: "Populate the visible RF workflow with a source bin, destination bin, and one or more SKU quantities, then open the review step without completing the transfer.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          sourceBin: { type: "string", minLength: 1 },
-          destinationBin: { type: "string", minLength: 1 },
-          items: {
-            type: "array",
-            minItems: 1,
-            items: {
-              type: "object",
-              properties: {
-                sku: { type: "string", minLength: 1 },
-                quantity: { type: "integer", minimum: 1 },
-              },
-              required: ["sku", "quantity"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ["sourceBin", "destinationBin", "items"],
-        additionalProperties: false,
-      },
-      annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute(input) {
-        const sourceBin = normalize(input?.sourceBin || "");
-        const destinationBin = normalize(input?.destinationBin || "");
-        const items = Array.isArray(input?.items) ? input.items : [];
-        if (!sourceBin || !destinationBin || sourceBin === destinationBin) {
-          throw new Error("Source and destination bins are required and must be different.");
-        }
-        if (!items.length || items.some((item) => !normalize(item?.sku || "") || !Number.isInteger(item?.quantity) || item.quantity < 1)) {
-          throw new Error("At least one valid SKU and whole-number quantity is required.");
-        }
-
-        state.sourceBin = sourceBin;
-        state.destinationBin = destinationBin;
-        state.items = items.map((item) => ({
-          id: crypto.randomUUID(),
-          sku: normalize(item.sku),
-          quantity: item.quantity,
-        }));
-        elements.sourceBin.value = sourceBin;
-        elements.sourceBin.readOnly = true;
-        elements.destinationBin.value = destinationBin;
-        renderBucket();
-        prepareReview();
-        return { status: "staged", sourceBin, destinationBin, itemCount: state.items.length, totalQuantity: totalQuantity() };
-      },
-    }, { signal: lifecycle.signal })).catch(reportRegistrationError);
-
-    void Promise.resolve(context.registerTool({
-      name: "complete_staged_transfer",
-      title: "Complete staged transfer",
-      description: "Confirm the transfer currently shown in the review step and add it to device-local transfer history.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-      annotations: { readOnlyHint: false, untrustedContentHint: false },
-      execute() {
-        if (state.currentStep !== "review" || !state.sourceBin || !state.destinationBin || !state.items.length) {
-          throw new Error("No valid transfer is currently staged for confirmation.");
-        }
-        confirmTransfer();
-        return { status: "completed", sourceBin: state.sourceBin, destinationBin: state.destinationBin };
-      },
-    }, { signal: lifecycle.signal })).catch(reportRegistrationError);
-  } catch (error) {
-    reportRegistrationError(error);
-  }
-}
-
 $("#set-source").addEventListener("click", setSourceBin);
 elements.sourceBin.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !elements.sourceBin.readOnly) setSourceBin();
 });
 $("#item-form").addEventListener("submit", addItem);
 $("#save-draft").addEventListener("click", saveDraft);
-elements.continueButton.addEventListener("click", goToDestination);
-$("#review-transfer").addEventListener("click", prepareReview);
-elements.destinationBin.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") prepareReview();
+elements.continueButton.addEventListener("click", goToScan);
+$("#select-bucket-item").addEventListener("click", selectBucketItem);
+elements.scanSku.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") selectBucketItem();
 });
-$("#confirm-transfer").addEventListener("click", confirmTransfer);
-$("#start-another").addEventListener("click", resetTransfer);
+$("#complete-transfer").addEventListener("click", completeTransfer);
+elements.destinationBin.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") completeTransfer();
+});
+$("#start-another").addEventListener("click", continueAfterTransfer);
 $$('[data-back="source"]').forEach((button) => button.addEventListener("click", goToSource));
 $$('[data-back="items"]').forEach((button) => button.addEventListener("click", () => showStep("items")));
-$$('[data-back="destination"]').forEach((button) => button.addEventListener("click", () => showStep("destination")));
+$$('[data-back="scan"]').forEach((button) => button.addEventListener("click", goToScan));
 $("#clear-history").addEventListener("click", () => {
   localStorage.removeItem(HISTORY_KEY);
   renderHistory();
@@ -756,7 +709,7 @@ async function initializeOfflineSupport() {
   let workerReady = false;
   if ("serviceWorker" in navigator) {
     try {
-      await navigator.serviceWorker.register("service-worker.js?v=4");
+      await navigator.serviceWorker.register("service-worker.js?v=5");
       await navigator.serviceWorker.ready;
       workerReady = true;
     } catch {
@@ -778,7 +731,6 @@ window.setInterval(() => {
 renderBucket();
 renderHistory();
 loadDraft();
-registerWebMcpTools();
 updateConnectionStatus();
 void initializeOfflineSupport();
 void syncQueue();

@@ -10,8 +10,8 @@ Use this valid test transfer:
 
 1. Enter source bin `A01.01.A03`.
 2. Add SKU `BWV12` with quantity `1`.
-3. Continue and enter destination bin `A01.01.A04`.
-4. Review and confirm the transfer.
+3. Continue and scan `BWV12` again from the bucket.
+4. Enter destination bin `A01.01.A04`, choose the move quantity, and complete the transfer.
 5. Expand **Recent transfers** to inspect the SKU, quantity, and sync status.
 
 The confirmed move subtracts one unit from the source inventory and adds one unit to the destination inventory in Supabase.
@@ -21,11 +21,11 @@ The confirmed move subtracts one unit from the source inventory and adds one uni
 1. Scan or enter a source bin.
 2. Scan SKUs and add quantities to a multi-item transfer bucket.
 3. Edit quantities or remove items before continuing.
-4. Scan a destination bin.
-5. Review and confirm the bin transfer.
+4. Scan a SKU from the bucket, enter the quantity to move, and scan its destination bin.
+5. Complete that SKU's bin transfer immediately. If quantity remains, scan the SKU again and choose another destination.
 
 ```text
-Source bin → Add SKUs and quantities → Destination bin → Review → Sync
+Source bin → Add SKUs and quantities → Scan SKU from bucket → Move quantity to destination → Sync
 ```
 
 ## Features
@@ -33,6 +33,7 @@ Source bin → Add SKUs and quantities → Destination bin → Review → Sync
 - Mobile scanner layout with one focused decision per screen
 - Supabase validation for active bins, SKUs, and available quantities
 - Multi-SKU transfer bucket with edit and remove controls
+- Partial-quantity moves to different destination bins, each recorded as its own transfer
 - Atomic source-to-destination inventory updates
 - Expandable device history with item-level quantities and sync status
 - Offline application cache and cached warehouse master data
