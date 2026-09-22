@@ -2,13 +2,17 @@ const STORAGE_KEY = "rf-stock-move-draft-v1";
 const HISTORY_KEY = "rf-stock-move-history-v1";
 const SYNC_QUEUE_KEY = "rf-stock-move-sync-queue-v1";
 const CONFLICT_KEY = "rf-stock-move-conflicts-v1";
-const MASTER_DATA_KEY = "rf-stock-move-master-data-v1";
 const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
+const SNAPSHOT_PAGE_SIZE = 500;
+const SNAPSHOT_DB_NAME = "rf-stock-move-snapshot-v2";
 const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
 const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
 let connectionHealthy = navigator.onLine;
 let offlineReady = false;
 let syncInProgress = false;
+let snapshotRefresh = null;
+let snapshotMeta = { cursor: 0, cachedAt: null, ready: false };
+const lookup = new Map();
 
 const state = {
   sourceBin: "",
@@ -53,10 +57,10 @@ function normalize(value) {
   return value.trim().toUpperCase();
 }
 
-async function readSupabase(table, query) {
+async function readSupabase(table, query, timeoutMs = 4000) {
   if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Database configuration is missing.");
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 4000);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${query}`, {
       signal: controller.signal,
@@ -78,18 +82,84 @@ async function readSupabase(table, query) {
   }
 }
 
-function getMasterData() {
-  try {
-    return JSON.parse(localStorage.getItem(MASTER_DATA_KEY)) || { bins: [], items: [], inventory: [] };
-  } catch {
-    return { bins: [], items: [], inventory: [] };
-  }
+function openSnapshotDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(SNAPSHOT_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore("records");
+      request.result.createObjectStore("meta");
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+const snapshotDb = openSnapshotDb().catch(() => null);
+
+async function readSnapshotMeta() {
+  const db = await snapshotDb;
+  if (!db) return snapshotMeta;
+  return new Promise((resolve, reject) => {
+    const request = db.transaction("meta", "readonly").objectStore("meta").get("snapshot");
+    request.onsuccess = () => resolve(request.result || snapshotMeta);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function readSnapshot(kind, key) {
+  const cacheKey = `${kind}:${key}`;
+  if (lookup.has(cacheKey)) return lookup.get(cacheKey);
+  const db = await snapshotDb;
+  if (!db) return null;
+  const row = await new Promise((resolve, reject) => {
+    const request = db.transaction("records", "readonly").objectStore("records").get(cacheKey);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  });
+  if (lookup.size >= 500) lookup.delete(lookup.keys().next().value);
+  lookup.set(cacheKey, row);
+  return row;
+}
+
+async function applySnapshotPage(rows) {
+  const db = await snapshotDb;
+  if (!db) throw new Error("Offline storage is unavailable on this device.");
+  const cursor = rows.at(-1)?.version ?? snapshotMeta.cursor;
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction(["records", "meta"], "readwrite");
+    const records = transaction.objectStore("records");
+    for (const row of rows) {
+      const key = `${row.kind}:${row.record_key}`;
+      if (row.payload === null) records.delete(key);
+      else records.put(row.payload, key);
+    }
+    transaction.objectStore("meta").put({ ...snapshotMeta, cursor }, "snapshot");
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+  });
+  snapshotMeta.cursor = cursor;
+  for (const row of rows) lookup.delete(`${row.kind}:${row.record_key}`);
+}
+
+async function markSnapshotReady() {
+  const db = await snapshotDb;
+  if (!db) throw new Error("Offline storage is unavailable on this device.");
+  const next = { ...snapshotMeta, ready: true, cachedAt: new Date().toISOString() };
+  await new Promise((resolve, reject) => {
+    const transaction = db.transaction("meta", "readwrite");
+    transaction.objectStore("meta").put(next, "snapshot");
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error);
+  });
+  snapshotMeta = next;
 }
 
 function updateSnapshotStatus() {
-  const cachedAt = getMasterData().cachedAt;
+  const cachedAt = snapshotMeta.cachedAt;
   if (!cachedAt) {
-    elements.snapshotStatus.hidden = true;
+    elements.snapshotStatus.hidden = false;
+    elements.snapshotStatus.textContent = "Preparing offline inventory snapshot. Keep this page open and connected before using it offline.";
     return;
   }
   const ageMinutes = Math.max(0, Math.floor((Date.now() - new Date(cachedAt).getTime()) / 60000));
@@ -99,18 +169,27 @@ function updateSnapshotStatus() {
 }
 
 async function refreshMasterData() {
-  try {
-    const [bins, items, inventory] = await Promise.all([
-      readSupabase("bins", "active=eq.true&select=id"),
-      readSupabase("items", "active=eq.true&select=sku,description,unit"),
-      readSupabase("inventory", "select=bin_id,sku,quantity"),
-    ]);
-    localStorage.setItem(MASTER_DATA_KEY, JSON.stringify({ bins, items, inventory, cachedAt: new Date().toISOString() }));
-    updateSnapshotStatus();
-    return true;
-  } catch {
-    return false;
-  }
+  if (snapshotRefresh) return snapshotRefresh;
+  snapshotRefresh = (async () => {
+    try {
+      if (!await snapshotDb) return false;
+      do {
+        const rows = await readSupabase("inventory_changes", `version=gt.${snapshotMeta.cursor}&order=version.asc&select=version,kind,record_key,payload&limit=${SNAPSHOT_PAGE_SIZE}`, 20000);
+        if (rows.length) await applySnapshotPage(rows);
+        if (rows.length < SNAPSHOT_PAGE_SIZE) break;
+      } while (true);
+      await markSnapshotReady();
+      localStorage.removeItem("rf-stock-move-master-data-v1");
+      offlineReady = Boolean(navigator.serviceWorker?.controller || offlineReady);
+      updateSnapshotStatus();
+      updateConnectionStatus();
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  try { return await snapshotRefresh; }
+  finally { snapshotRefresh = null; }
 }
 
 async function findBin(binId) {
@@ -118,7 +197,7 @@ async function findBin(binId) {
     const rows = await readSupabase("bins", `id=eq.${encodeURIComponent(binId)}&active=eq.true&select=id&limit=1`);
     return rows[0] || null;
   } catch (error) {
-    const cached = getMasterData().bins.find((bin) => bin.id === binId);
+    const cached = await readSnapshot("bin", binId);
     if (cached) return cached;
     throw error;
   }
@@ -129,7 +208,7 @@ async function findItem(sku) {
     const rows = await readSupabase("items", `sku=eq.${encodeURIComponent(sku)}&active=eq.true&select=sku,description,unit&limit=1`);
     return rows[0] || null;
   } catch (error) {
-    const cached = getMasterData().items.find((item) => item.sku === sku);
+    const cached = await readSnapshot("item", sku);
     if (cached) return cached;
     throw error;
   }
@@ -140,7 +219,7 @@ async function findInventory(binId, sku) {
     const rows = await readSupabase("inventory", `bin_id=eq.${encodeURIComponent(binId)}&sku=eq.${encodeURIComponent(sku)}&select=quantity&limit=1`);
     return rows[0] || null;
   } catch (error) {
-    const cached = getMasterData().inventory.find((row) => row.bin_id === binId && row.sku === sku);
+    const cached = await readSnapshot("inventory", `${binId}|${sku}`);
     if (cached) return cached;
     throw error;
   }
@@ -791,7 +870,7 @@ window.addEventListener("offline", () => {
   updateSnapshotStatus();
 });
 function refreshSnapshotIfDue() {
-  const cachedAt = getMasterData().cachedAt;
+  const cachedAt = snapshotMeta.cachedAt;
   if (navigator.onLine && (!cachedAt || Date.now() - new Date(cachedAt).getTime() >= SNAPSHOT_REFRESH_MS)) {
     void refreshMasterData();
   }
@@ -809,13 +888,14 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function initializeOfflineSupport() {
+  snapshotMeta = await readSnapshotMeta();
+  updateSnapshotStatus();
   const dataRefreshed = await refreshMasterData();
-  const cached = getMasterData();
-  const dataReady = dataRefreshed || (cached.bins.length > 0 && cached.items.length > 0 && cached.inventory.length > 0);
+  const dataReady = dataRefreshed || snapshotMeta.ready;
   let workerReady = false;
   if ("serviceWorker" in navigator) {
     try {
-      await navigator.serviceWorker.register("service-worker.js?v=6");
+      await navigator.serviceWorker.register("service-worker.js?v=7");
       await navigator.serviceWorker.ready;
       workerReady = true;
     } catch {

@@ -36,8 +36,8 @@ Source bin → Add SKUs and quantities → Scan SKU from bucket → Move quantit
 - Partial-quantity moves to different destination bins, each recorded as its own transfer
 - Atomic source-to-destination inventory updates
 - Expandable device history with item-level quantities and sync status
-- Offline application cache and cached warehouse master data
-- Inventory snapshots refreshed about every five minutes while the app is open and connected
+- Offline application cache and a paged inventory snapshot in IndexedDB
+- Incremental inventory updates about every five minutes while the app is open and connected; scanned records use a fast in-memory lookup map
 - Local transfer queue with automatic retry after an outage
 - Server-side conflict reports when a queued move is rejected; affected transfers stay on the device for review and retry
 - Idempotent transaction IDs that prevent duplicate inventory updates
@@ -88,4 +88,4 @@ Then open `http://127.0.0.1:4173/`.
 
 The scanner uses portfolio data in Supabase. It does not connect to NetSuite or any company production system.
 
-Apply `supabase/offline_conflicts.sql` after the base schema when setting up a fresh Supabase project. Offline transfers depend on a previously loaded app and snapshot on that device; browsers cannot guarantee background sync while the app is fully closed, so syncing resumes when it is reopened or focused.
+Apply `supabase/offline_conflicts.sql` and then `supabase/inventory_delta.sql` after the base schema when setting up a fresh Supabase project. The first snapshot downloads the existing inventory in pages; later refreshes download only changed records. Offline transfers depend on a completed snapshot on that device; browsers cannot guarantee background sync while the app is fully closed, so syncing resumes when it is reopened or focused.
