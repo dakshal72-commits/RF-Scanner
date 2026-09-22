@@ -1,16 +1,20 @@
 const STORAGE_KEY = "rf-stock-move-draft-v1";
 const HISTORY_KEY = "rf-stock-move-history-v1";
 const SYNC_QUEUE_KEY = "rf-stock-move-sync-queue-v1";
+const CONFLICT_KEY = "rf-stock-move-conflicts-v1";
 const MASTER_DATA_KEY = "rf-stock-move-master-data-v1";
+const SNAPSHOT_REFRESH_MS = 5 * 60 * 1000;
 const SUPABASE_URL = window.RF_CONFIG?.supabaseUrl;
 const SUPABASE_KEY = window.RF_CONFIG?.supabasePublishableKey;
 let connectionHealthy = navigator.onLine;
 let offlineReady = false;
+let syncInProgress = false;
 
 const state = {
   sourceBin: "",
   items: [],
   selectedItemId: "",
+  lastTransferClientId: "",
   currentStep: "source",
 };
 
@@ -42,6 +46,7 @@ const elements = {
   iosInstallTip: $("#ios-install-tip"),
   connectionStatus: $("#connection-status"),
   retrySync: $("#retry-sync"),
+  snapshotStatus: $("#snapshot-status"),
 };
 
 function normalize(value) {
@@ -81,6 +86,18 @@ function getMasterData() {
   }
 }
 
+function updateSnapshotStatus() {
+  const cachedAt = getMasterData().cachedAt;
+  if (!cachedAt) {
+    elements.snapshotStatus.hidden = true;
+    return;
+  }
+  const ageMinutes = Math.max(0, Math.floor((Date.now() - new Date(cachedAt).getTime()) / 60000));
+  elements.snapshotStatus.hidden = false;
+  elements.snapshotStatus.classList.toggle("is-stale", !navigator.onLine || ageMinutes >= 30);
+  elements.snapshotStatus.textContent = `${navigator.onLine ? "Inventory snapshot" : "Offline inventory snapshot"}: ${ageMinutes < 1 ? "just updated" : `${ageMinutes} min old`}. Transfers are checked against current stock when synced.`;
+}
+
 async function refreshMasterData() {
   try {
     const [bins, items, inventory] = await Promise.all([
@@ -89,6 +106,7 @@ async function refreshMasterData() {
       readSupabase("inventory", "select=bin_id,sku,quantity"),
     ]);
     localStorage.setItem(MASTER_DATA_KEY, JSON.stringify({ bins, items, inventory, cachedAt: new Date().toISOString() }));
+    updateSnapshotStatus();
     return true;
   } catch {
     return false;
@@ -450,12 +468,29 @@ function saveSyncQueue(queue) {
   updateConnectionStatus();
 }
 
+function getConflicts() {
+  try {
+    return JSON.parse(localStorage.getItem(CONFLICT_KEY)) || [];
+  } catch {
+    return [];
+  }
+}
+
+function saveConflicts(conflicts) {
+  localStorage.setItem(CONFLICT_KEY, JSON.stringify(conflicts));
+  updateConnectionStatus();
+}
+
 function updateConnectionStatus() {
   const pending = getSyncQueue().length;
+  const conflicts = getConflicts().length;
   const online = navigator.onLine && connectionHealthy;
   elements.connectionStatus.classList.toggle("is-offline", !online);
   elements.connectionStatus.classList.toggle("has-pending", pending > 0);
-  elements.connectionStatus.textContent = !online
+  elements.connectionStatus.classList.toggle("has-conflict", conflicts > 0);
+  elements.connectionStatus.textContent = conflicts
+    ? `${online ? "Online" : "Offline"} • ${conflicts} ${conflicts === 1 ? "conflict" : "conflicts"} • ${pending} waiting`
+    : !online
     ? `Offline${pending ? ` • ${pending} waiting` : ""}`
     : pending
       ? `Online • ${pending} waiting`
@@ -465,10 +500,18 @@ function updateConnectionStatus() {
   elements.retrySync.hidden = pending === 0;
 }
 
-function updateHistorySyncStatus(clientId, syncStatus) {
+function updateHistorySyncStatus(clientId, syncStatus, reason = "") {
   const history = getHistory();
   const transfer = history.find((entry) => entry.clientId === clientId);
-  if (transfer) transfer.syncStatus = syncStatus;
+  if (transfer) {
+    transfer.syncStatus = syncStatus;
+    transfer.conflictReason = reason;
+  }
+  if (state.lastTransferClientId === clientId && state.currentStep === "success") {
+    $("#success-title").textContent = syncStatus === "synced" ? "Stock moved successfully" : syncStatus === "conflict" ? "Transfer needs attention" : "Transfer saved for sync";
+    if (syncStatus === "conflict") $("#success-reference").textContent = `${transfer?.reference || "Transfer"} • Not applied to inventory. Check Recent transfers.`;
+    else if (syncStatus === "synced") $("#success-reference").textContent = `${transfer?.reference || "Transfer"} • Synced with warehouse inventory.`;
+  }
   localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
   renderHistory();
 }
@@ -478,14 +521,13 @@ async function sendTransfer(transfer) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 5000);
   try {
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_stock_transfer`, {
+    const response = await fetch(`${SUPABASE_URL}/rest/v1/rpc/submit_stock_transfer_v2`, {
       method: "POST",
       signal: controller.signal,
       headers: {
         apikey: SUPABASE_KEY,
         Authorization: `Bearer ${SUPABASE_KEY}`,
         "Content-Type": "application/json",
-        Prefer: "return=minimal",
       },
       body: JSON.stringify({
         p_client_id: transfer.clientId,
@@ -496,46 +538,79 @@ async function sendTransfer(transfer) {
         p_completed_at: transfer.completedAt,
       }),
     });
-    if (!response.ok) throw new Error("Transfer could not be synced.");
+    if (!response.ok) {
+      let details = {};
+      try { details = await response.json(); } catch { /* Keep the HTTP status below. */ }
+      const error = new Error(details.message || `Warehouse rejected the transfer (HTTP ${response.status}).`);
+      error.retryable = response.status === 408 || response.status === 429 || response.status >= 500 || response.status === 401 || response.status === 403;
+      throw error;
+    }
+    const result = await response.json();
+    if (result?.status === "conflict") {
+      const error = new Error(result.reason || "Warehouse inventory conflict.");
+      error.retryable = false;
+      throw error;
+    }
+    if (result?.status !== "synced") throw new Error("Unexpected warehouse response.");
     connectionHealthy = true;
-  } catch {
-    connectionHealthy = false;
-    throw new Error("Transfer could not be synced.");
+  } catch (error) {
+    if (error.retryable === undefined) {
+      error.retryable = true;
+      connectionHealthy = false;
+    } else {
+      connectionHealthy = true;
+    }
+    throw error;
   } finally {
     window.clearTimeout(timeout);
   }
 }
 
 async function syncQueue({ announce = false } = {}) {
+  if (syncInProgress) return;
   if (!navigator.onLine) {
     updateConnectionStatus();
-    if (announce) showMessage("Still offline. The transfer remains safely queued.");
+    updateSnapshotStatus();
+    if (announce) showMessage("Still offline. Pending transfers remain on this device.");
     return;
   }
-  const queue = getSyncQueue();
-  if (!queue.length) {
-    updateConnectionStatus();
-    return;
-  }
-  elements.connectionStatus.textContent = `Syncing ${queue.length}...`;
-  const remaining = [];
+  syncInProgress = true;
   let synced = 0;
-  for (const transfer of queue) {
-    try {
-      await sendTransfer(transfer);
-      updateHistorySyncStatus(transfer.clientId, "synced");
-      synced += 1;
-    } catch {
-      remaining.push(transfer);
-      updateHistorySyncStatus(transfer.clientId, "waiting");
+  let foundConflicts = 0;
+  try {
+    for (const transfer of getSyncQueue()) {
+      elements.connectionStatus.textContent = "Syncing pending transfers...";
+      try {
+        await sendTransfer(transfer);
+        saveSyncQueue(getSyncQueue().filter((entry) => entry.clientId !== transfer.clientId));
+        updateHistorySyncStatus(transfer.clientId, "synced");
+        synced += 1;
+      } catch (error) {
+        if (error.retryable) {
+          updateHistorySyncStatus(transfer.clientId, "waiting");
+          continue;
+        }
+        const conflicts = getConflicts();
+        if (!conflicts.some((entry) => entry.transfer.clientId === transfer.clientId)) {
+          conflicts.unshift({ transfer, reason: error.message, detectedAt: new Date().toISOString() });
+          saveConflicts(conflicts);
+        }
+        saveSyncQueue(getSyncQueue().filter((entry) => entry.clientId !== transfer.clientId));
+        updateHistorySyncStatus(transfer.clientId, "conflict", error.message);
+        foundConflicts += 1;
+      }
     }
-  }
-  saveSyncQueue(remaining);
-  if (synced) void refreshMasterData();
-  if (announce || synced) {
-    showMessage(remaining.length
-      ? `${synced} synced. ${remaining.length} still waiting.`
-      : `${synced} pending ${synced === 1 ? "transfer" : "transfers"} synced.`);
+    if (synced) void refreshMasterData();
+    if (announce || synced || foundConflicts) {
+      showMessage(foundConflicts
+        ? `${foundConflicts} transfer ${foundConflicts === 1 ? "needs" : "need"} attention. Check Recent transfers.`
+        : getSyncQueue().length
+          ? `${synced} synced. ${getSyncQueue().length} still waiting.`
+          : synced ? `${synced} ${synced === 1 ? "transfer" : "transfers"} synced.` : "No pending transfers.");
+    }
+  } finally {
+    syncInProgress = false;
+    updateConnectionStatus();
   }
 }
 
@@ -590,7 +665,7 @@ async function completeTransfer() {
   };
   const history = getHistory();
   history.unshift(transfer);
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 8)));
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
   const queue = getSyncQueue();
   queue.push(transfer);
   saveSyncQueue(queue);
@@ -598,10 +673,12 @@ async function completeTransfer() {
   if (Number.isInteger(item.available)) item.available = Math.max(0, item.available - quantity);
   if (item.quantity === 0) state.items = state.items.filter((entry) => entry.id !== item.id);
   state.selectedItemId = "";
+  state.lastTransferClientId = transfer.clientId;
   persistDraft();
   renderBucket();
   $("#start-another").textContent = state.items.length ? "Move another item" : "Add more items";
-  $("#success-reference").textContent = `${reference} • ${item.sku} • ${quantity} units • ${state.sourceBin} → ${destination} • ${navigator.onLine && connectionHealthy ? "Syncing" : "Waiting to sync"}`;
+  $("#success-title").textContent = "Transfer saved for sync";
+  $("#success-reference").textContent = `${reference} • ${item.sku} • ${quantity} units • ${state.sourceBin} → ${destination} • Waiting to sync`;
   renderHistory();
   showStep("success");
   void syncQueue();
@@ -630,18 +707,32 @@ function renderHistory() {
       <strong>${escapeHtml(item.sku)}</strong>
       <span>Qty ${Number(item.quantity) || 0}</span>
     </li>`).join("");
-    const syncStatus = transfer.syncStatus === "synced" ? "Synced" : transfer.syncStatus === "waiting" ? "Waiting to sync" : "Device only";
+    const syncStatus = transfer.syncStatus === "synced" ? "Synced" : transfer.syncStatus === "conflict" ? "Needs attention" : transfer.syncStatus === "waiting" ? "Waiting to sync" : "Device only";
     return `<details class="history-card">
       <summary>
-        <span class="history-transfer"><strong>${escapeHtml(transfer.reference)}</strong><span>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${items.length} ${items.length === 1 ? "item" : "items"}</span><span class="sync-state ${syncStatus === "Waiting to sync" ? "is-pending" : ""}">${syncStatus}</span></span>
+        <span class="history-transfer"><strong>${escapeHtml(transfer.reference)}</strong><span>${escapeHtml(transfer.sourceBin)} → ${escapeHtml(transfer.destinationBin)} • ${items.length} ${items.length === 1 ? "item" : "items"}</span><span class="sync-state ${syncStatus === "Waiting to sync" ? "is-pending" : syncStatus === "Needs attention" ? "is-conflict" : ""}">${syncStatus}</span></span>
         <span class="history-date">${escapeHtml(date)}</span>
       </summary>
       <div class="history-details">
         <p>Items moved</p>
         <ul>${itemRows || "<li>No item details saved.</li>"}</ul>
+        ${syncStatus === "Needs attention" ? `<p class="conflict-reason">Not applied to inventory: ${escapeHtml(transfer.conflictReason || "The warehouse rejected this transfer.")}</p><button class="text-button retry-conflict" type="button" data-client-id="${escapeHtml(transfer.clientId)}">Retry this transfer</button>` : ""}
       </div>
     </details>`;
   }).join("");
+  list.querySelectorAll(".retry-conflict").forEach((button) => button.addEventListener("click", () => retryConflict(button.dataset.clientId)));
+}
+
+function retryConflict(clientId) {
+  const conflict = getConflicts().find((entry) => entry.transfer.clientId === clientId);
+  if (!conflict) return;
+  if (!getSyncQueue().some((entry) => entry.clientId === clientId)) {
+    saveSyncQueue([...getSyncQueue(), conflict.transfer]);
+  }
+  saveConflicts(getConflicts().filter((entry) => entry.transfer.clientId !== clientId));
+  updateHistorySyncStatus(clientId, "waiting");
+  showMessage("Transfer queued for another attempt.");
+  void syncQueue({ announce: true });
 }
 
 function continueAfterTransfer() {
@@ -682,9 +773,10 @@ $$('[data-back="source"]').forEach((button) => button.addEventListener("click", 
 $$('[data-back="items"]').forEach((button) => button.addEventListener("click", () => showStep("items")));
 $$('[data-back="scan"]').forEach((button) => button.addEventListener("click", goToScan));
 $("#clear-history").addEventListener("click", () => {
-  localStorage.removeItem(HISTORY_KEY);
+  const unresolved = new Set(getConflicts().map((entry) => entry.transfer.clientId));
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(getHistory().filter((entry) => unresolved.has(entry.clientId))));
   renderHistory();
-  showMessage("Transfer history cleared.");
+  showMessage(unresolved.size ? "Completed history cleared. Conflicts were kept." : "Transfer history cleared.");
 });
 elements.retrySync.addEventListener("click", () => void syncQueue({ announce: true }));
 window.addEventListener("online", () => {
@@ -696,10 +788,24 @@ window.addEventListener("online", () => {
 window.addEventListener("offline", () => {
   connectionHealthy = false;
   updateConnectionStatus();
+  updateSnapshotStatus();
 });
-window.addEventListener("focus", () => void syncQueue());
+function refreshSnapshotIfDue() {
+  const cachedAt = getMasterData().cachedAt;
+  if (navigator.onLine && (!cachedAt || Date.now() - new Date(cachedAt).getTime() >= SNAPSHOT_REFRESH_MS)) {
+    void refreshMasterData();
+  }
+  updateSnapshotStatus();
+}
+window.addEventListener("focus", () => {
+  refreshSnapshotIfDue();
+  void syncQueue();
+});
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) void syncQueue();
+  if (!document.hidden) {
+    refreshSnapshotIfDue();
+    void syncQueue();
+  }
 });
 
 async function initializeOfflineSupport() {
@@ -709,7 +815,7 @@ async function initializeOfflineSupport() {
   let workerReady = false;
   if ("serviceWorker" in navigator) {
     try {
-      await navigator.serviceWorker.register("service-worker.js?v=5");
+      await navigator.serviceWorker.register("service-worker.js?v=6");
       await navigator.serviceWorker.ready;
       workerReady = true;
     } catch {
@@ -717,6 +823,7 @@ async function initializeOfflineSupport() {
     }
   }
   offlineReady = dataReady && workerReady;
+  updateSnapshotStatus();
   updateConnectionStatus();
 }
 
@@ -727,10 +834,12 @@ elements.iosInstallTip.hidden = !isIos || isStandalone;
 window.setInterval(() => {
   if (getSyncQueue().length) void syncQueue();
 }, 15000);
+window.setInterval(refreshSnapshotIfDue, 60000);
 
 renderBucket();
 renderHistory();
 loadDraft();
+updateSnapshotStatus();
 updateConnectionStatus();
 void initializeOfflineSupport();
 void syncQueue();

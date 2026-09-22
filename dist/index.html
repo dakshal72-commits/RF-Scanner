@@ -12,7 +12,7 @@
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%230b1728'/%3E%3Cpath d='M15 18h34v9H15zm0 19h22v9H15z' fill='%236ee7b7'/%3E%3Cpath d='M42 34l9 8-9 8' fill='none' stroke='%23fff' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
-    <link rel="stylesheet" href="styles.css?v=bucket-routing-1" />
+    <link rel="stylesheet" href="styles.css?v=offline-conflicts-1" />
   </head>
   <body>
     <header class="app-header">
@@ -25,6 +25,7 @@
 
     <main class="shell">
       <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+      <p id="snapshot-status" class="snapshot-status" hidden></p>
       <div id="ios-install-tip" class="install-tip" hidden>
         For reliable outage use on iPhone: tap <strong>Share</strong>, choose <strong>Add to Home Screen</strong>, then open RF Scanner from its icon.
       </div>
@@ -149,7 +150,7 @@
         <article class="panel success-panel">
           <div class="success-icon" aria-hidden="true">✓</div>
           <p class="panel-kicker">Transfer complete</p>
-          <h2 id="success-title">Stock moved successfully</h2>
+          <h2 id="success-title">Transfer saved for sync</h2>
           <p id="success-reference" class="reference"></p>
           <button id="start-another" class="button button-primary" type="button">Move another item</button>
         </article>
@@ -194,6 +195,6 @@
     </template>
 
     <script src="config.js?v=inventory-2" defer></script>
-    <script src="app.js?v=bucket-routing-1" defer></script>
+    <script src="app.js?v=offline-conflicts-1" defer></script>
   </body>
 </html>

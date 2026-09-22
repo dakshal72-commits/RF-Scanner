@@ -37,7 +37,9 @@ Source bin → Add SKUs and quantities → Scan SKU from bucket → Move quantit
 - Atomic source-to-destination inventory updates
 - Expandable device history with item-level quantities and sync status
 - Offline application cache and cached warehouse master data
+- Inventory snapshots refreshed about every five minutes while the app is open and connected
 - Local transfer queue with automatic retry after an outage
+- Server-side conflict reports when a queued move is rejected; affected transfers stay on the device for review and retry
 - Idempotent transaction IDs that prevent duplicate inventory updates
 - Installable Home Screen experience for iPhone and Android
 - Responsive desktop support and GitHub Pages deployment
@@ -59,7 +61,7 @@ The application rejects:
 2. Install it using **Add to Home Screen** or **Install app**.
 3. Disconnect the device from the network and complete a transfer.
 4. Confirm that the move displays **Waiting to sync**.
-5. Reconnect and confirm that it changes to **Synced** and updates Supabase once.
+5. Reconnect and confirm that it changes to **Synced** and updates Supabase once. If current inventory cannot support the move, it changes to **Needs attention** and appears on the supervisor dashboard.
 
 ## Technologies and demonstrated skills
 
@@ -85,3 +87,5 @@ python -m http.server 4173 --directory dist
 Then open `http://127.0.0.1:4173/`.
 
 The scanner uses portfolio data in Supabase. It does not connect to NetSuite or any company production system.
+
+Apply `supabase/offline_conflicts.sql` after the base schema when setting up a fresh Supabase project. Offline transfers depend on a previously loaded app and snapshot on that device; browsers cannot guarantee background sync while the app is fully closed, so syncing resumes when it is reopened or focused.
